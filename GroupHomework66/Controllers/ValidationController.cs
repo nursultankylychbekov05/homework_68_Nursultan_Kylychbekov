@@ -1,25 +1,25 @@
-﻿using GroupHomework66.Models;
-using Microsoft.AspNetCore.Identity;
+﻿using GroupHomework66.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace GroupHomework66.Controllers;
 
 public class ValidationController : Controller
 {
-    
-    private SiteMobileContext _context;
-    private readonly UserManager<User> _userManager;
+    private readonly IAccountService _accountService;
 
-    public ValidationController(UserManager<User> userManager, SiteMobileContext context)
+    public ValidationController(IAccountService accountService)
     {
-        _context = context;
-        _userManager = userManager;
+        _accountService = accountService;
     }
-    
+
     public bool ValidatePhoneNumber(string PhoneNumber) => PhoneNumber.All(char.IsDigit);
-    public bool ValidateEmailOnRegistration(string Email) => !_userManager.Users.Any(u => u.Email == Email);
-    public bool ValidateUserNameOnRegistration(string UserName) => !_userManager.Users.Any(u => u.UserName == UserName);
-    public bool ValidatePassword(string Password) => Password.Length >= 8 && Password.Any(char.IsDigit) && Password.Any(char.IsUpper) && Password.Any(c => !char.IsLetter(c));
+
+    public Task<bool> ValidateEmailOnRegistration(string Email) => _accountService.IsEmailAvailableAsync(Email);
+
+    public Task<bool> ValidateUserNameOnRegistration(string UserName) => _accountService.IsUserNameAvailableAsync(UserName);
+
+    public bool ValidatePassword(string Password) =>
+        Password.Length >= 8 && Password.Any(char.IsDigit) && Password.Any(char.IsUpper) && Password.Any(c => !char.IsLetter(c));
 
     public bool ValidateDateOfBirth(DateTime DateOfBirth) => DateOfBirth <= DateTime.UtcNow.AddYears(-18);
 }
