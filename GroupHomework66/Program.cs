@@ -20,6 +20,7 @@ public class Program
         builder.Services.AddScoped<IVacancyService, VacancyService>();
         builder.Services.AddScoped<ICompanyService, CompanyService>();
         builder.Services.AddScoped<IAccountService, AccountService>();
+        builder.Services.AddScoped<IResponseService, ResponseService>();
         
         string? connection = builder.Configuration.GetConnectionString("DefaultConnection");
         builder.Services.AddDbContext<SiteMobileContext>(options => options.UseNpgsql(connection))
