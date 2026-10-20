@@ -1,56 +1,65 @@
 ﻿using System.Security.Claims;
-using GroupHomework66.Models;
 using GroupHomework66.Services;
 using GroupHomework66.ViewModels;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace GroupHomework66.Controllers;
 
-
 public class CandidateController : Controller
 {
-    private readonly SiteMobileContext _context;
-    private readonly UserManager<User> _userManager;
-    private readonly ResumePdfService _resumePdfService;
+    private readonly ICandidateService _candidateService;
 
-    public CandidateController(SiteMobileContext context, UserManager<User> userManager, ResumePdfService resumePdfService)
+    public CandidateController(ICandidateService candidateService)
     {
-        _context = context;
-        _userManager = userManager;
-        _resumePdfService = resumePdfService;
+        _candidateService = candidateService;
     }
+
+    private int CurrentUserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    
 
     [Authorize(Roles = "Applicant")]
     public async Task<IActionResult> Index()
     {
-        var user = await _userManager.GetUserAsync(User);
-        if (user == null)
-            return NotFound();
-
-        ViewData["EditProfile"] = new EditProfileViewModel
+        var result = await _candidateService.GetIndexAsync(CurrentUserId);
+        if (result == null)
         {
-            Username = user.UserName ?? string.Empty,
-            Email = user.Email ?? string.Empty,
-            PhoneNumber = user.PhoneNumber ?? string.Empty,
-            ProfilePicture = user.ProfilePicture
-        };
+            return NotFound();
+        }
 
-        var userId = user.Id;
-        var resumes = await _context.Resumes.Where(r => r.UserId == userId).ToListAsync();
-
-        return View(resumes);
+        ViewData["EditProfile"] = result.Profile;
+        return View(result.Resumes);
     }
-    
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditProfile(EditProfileViewModel model)
+    {
+        if (!ModelState.IsValid)
+        {
+            TempData["EditProfileError"] = "Проверьте правильность заполнения полей.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var result = await _candidateService.UpdateProfileAsync(CurrentUserId, model);
+        if (!result.Succeeded)
+        {
+            TempData["EditProfileError"] = result.Errors.Any()
+                ? string.Join(" ", result.Errors)
+                : "Не удалось сохранить изменения.";
+        }
+
+        return RedirectToAction(nameof(Index));
+    }
+
     [HttpGet]
     [Authorize(Roles = "Applicant")]
     public IActionResult CreateResume()
     {
         return View();
     }
-    
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Roles = "Applicant")]
@@ -62,52 +71,18 @@ public class CandidateController : Controller
             return RedirectToAction(nameof(Index));
         }
 
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resume = new Resume
-        {
-            UserId = userId,
-            Category = model.Category,
-            Title = model.Title,
-            ExpectedSalary = model.ExpectedSalary,
-            Telegram = model.Telegram,
-            Email = model.Email,
-            PhoneNumber = model.PhoneNumber,
-            Facebook = model.Facebook,
-            LinkedIn = model.LinkedIn
-        };
-
-        _context.Resumes.Add(resume);
-        await _context.SaveChangesAsync();
-
+        await _candidateService.CreateResumeAsync(CurrentUserId, model);
         return RedirectToAction(nameof(Index));
     }
-    
+
     [HttpGet]
     [Authorize(Roles = "Applicant")]
     public async Task<IActionResult> EditResume(int id)
     {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resume = await _context.Resumes.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
-        if (resume == null)
-        {
-            return NotFound();
-        }
-
-        var model = new CreateResumeViewModel
-        {
-            Category = resume.Category,
-            Title = resume.Title,
-            ExpectedSalary = resume.ExpectedSalary,
-            Telegram = resume.Telegram,
-            Email = resume.Email,
-            PhoneNumber = resume.PhoneNumber,
-            Facebook = resume.Facebook,
-            LinkedIn = resume.LinkedIn
-        };
-
-        return View(model);
+        var model = await _candidateService.GetResumeForEditAsync(CurrentUserId, id);
+        return model == null ? NotFound() : View(model);
     }
-    
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Roles = "Applicant")]
@@ -118,445 +93,25 @@ public class CandidateController : Controller
             return View(model);
         }
 
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resume = await _context.Resumes.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
-        if (resume == null)
-        {
-            return NotFound();
-        }
-
-        resume.Category = model.Category;
-        resume.Title = model.Title;
-        resume.ExpectedSalary = model.ExpectedSalary;
-        resume.Telegram = model.Telegram;
-        resume.Email = model.Email;
-        resume.PhoneNumber = model.PhoneNumber;
-        resume.Facebook = model.Facebook;
-        resume.LinkedIn = model.LinkedIn;
-        resume.UpdatedDate = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Index));
+        return await _candidateService.UpdateResumeAsync(CurrentUserId, id, model)
+            ? RedirectToAction(nameof(Index))
+            : NotFound();
     }
-    
+
     [HttpGet]
+    [Authorize]
     public async Task<IActionResult> Details(int id)
     {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resume = await _context.Resumes
-            .Include(r => r.WorkExperiences)
-            .Include(r => r.Courses)
-            .Include(r => r.Educations)
-            .FirstOrDefaultAsync(r => r.Id == id);
-        
-        if (resume == null)
-            return NotFound();
-
-        return View(resume);
+        var resume = await _candidateService.GetResumeDetailsAsync(CurrentUserId, id);
+        return resume == null ? NotFound() : View(resume);
     }
-    
+
     [HttpGet]
     [Authorize(Roles = "Applicant")]
     public async Task<IActionResult> DownloadPdf(int id)
     {
-        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(userIdValue, out var userId))
-        {
-            return Challenge();
-        }
-
-        var resume = await _context.Resumes
-            .AsNoTracking()
-            .Include(r => r.User)
-            .Include(r => r.WorkExperiences)
-            .Include(r => r.Educations)
-            .Include(r => r.Courses)
-            .FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
-
-        if (resume == null)
-        {
-            return NotFound();
-        }
-
-        var pdfBytes = _resumePdfService.Generate(resume);
-        var safeTitle = new string(resume.Title.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_').ToArray()).Trim('_');
-        if (string.IsNullOrWhiteSpace(safeTitle))
-        {
-            safeTitle = $"Resume_{resume.Id}";
-        }
-
-        return File(pdfBytes, "application/pdf", $"{safeTitle}.pdf");
-    }
-    
-    [HttpGet]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> AddWorkExperience(int resumeId)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resumeExists = await _context.Resumes.AnyAsync(r => r.Id == resumeId && r.UserId == userId);
-        if (!resumeExists)
-        {
-            return NotFound();
-        }
-
-        ViewBag.ResumeId = resumeId;
-
-        return View(new CreateWorkExperienceViewModel());
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> AddWorkExperience(int resumeId, CreateWorkExperienceViewModel model)
-    {
-        if (!ModelState.IsValid)
-        {
-            ViewBag.ResumeId = resumeId;
-            return View(model);
-        }
-
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resumeExists = await _context.Resumes.AnyAsync(r => r.Id == resumeId && r.UserId == userId);
-        if (!resumeExists)
-        {
-            return NotFound();
-        }
-
-        var workExperience = new WorkExperience
-        {
-            ResumeId = resumeId,
-            CompanyName = model.CompanyName,
-            Position = model.Position,
-            Description = model.Description,
-            StartDate = DateTime.SpecifyKind(model.StartDate, DateTimeKind.Utc),
-            EndDate = model.EndDate.HasValue ? DateTime.SpecifyKind(model.EndDate.Value, DateTimeKind.Utc) : null
-        };
-
-        _context.WorkExperiences.Add(workExperience);
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = resumeId });
-    }
-    
-    [HttpGet]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditWorkExperience(int id)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-        var experience = await _context.WorkExperiences.Include(w => w.Resume)
-            .FirstOrDefaultAsync(w => w.Id == id && w.Resume.UserId == userId);
-        if (experience == null)
-        {
-            return NotFound();
-        }
-
-        ViewBag.ResumeId = experience.ResumeId;
-
-        var model = new CreateWorkExperienceViewModel
-        {
-            CompanyName = experience.CompanyName,
-            Position = experience.Position,
-            Description = experience.Description,
-            StartDate = experience.StartDate,
-            EndDate = experience.EndDate
-        };
-
-        return View(model);
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditWorkExperience(int id, CreateWorkExperienceViewModel model)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var experience = await _context.WorkExperiences.Include(w => w.Resume)
-            .FirstOrDefaultAsync(w => w.Id == id && w.Resume.UserId == userId);
-        if (experience == null)
-        {
-            return NotFound();
-        }
-
-        if (!ModelState.IsValid)
-        {
-            ViewBag.ResumeId = experience.ResumeId;
-            return View(model);
-        }
-
-        experience.CompanyName = model.CompanyName;
-        experience.Position = model.Position;
-        experience.Description = model.Description;
-        experience.StartDate = DateTime.SpecifyKind(model.StartDate, DateTimeKind.Utc);
-        experience.EndDate = model.EndDate.HasValue ? DateTime.SpecifyKind(model.EndDate.Value, DateTimeKind.Utc) : null;
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = experience.ResumeId });
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> DeleteWorkExperience(int id)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var experience = await _context.WorkExperiences.Include(w => w.Resume)
-            .FirstOrDefaultAsync(w => w.Id == id && w.Resume.UserId == userId);
-        if (experience == null)
-            return NotFound();
-
-        var resumeId = experience.ResumeId;
-        _context.WorkExperiences.Remove(experience);
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = resumeId });
-    }
-    
-    [HttpGet]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> AddCourse(int resumeId)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resumeExists = await _context.Resumes.AnyAsync(r => r.Id == resumeId && r.UserId == userId);
-        if (!resumeExists)
-        {
-            return NotFound();
-        }
-
-        ViewBag.ResumeId = resumeId;
-
-        return View(new CreateCourseViewModel());
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> AddCourse(int resumeId, CreateCourseViewModel model)
-    {
-        if (!ModelState.IsValid)
-        {
-            ViewBag.ResumeId = resumeId;
-            return View(model);
-        }
-
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resumeExists = await _context.Resumes.AnyAsync(r => r.Id == resumeId && r.UserId == userId);
-        if (!resumeExists)
-        {
-            return NotFound();
-        }
-
-        var course = new Course
-        {
-            ResumeId = resumeId,
-            Name = model.Name,
-            Organization = model.Organization,
-            Description = model.Description,
-            StartDate = DateTime.SpecifyKind(model.StartDate, DateTimeKind.Utc),
-            EndDate = model.EndDate.HasValue ? DateTime.SpecifyKind(model.EndDate.Value, DateTimeKind.Utc) : null
-        };
-
-        _context.Courses.Add(course);
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = resumeId });
-    }
-    
-    [HttpGet]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditCourse(int id)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-        var course = await _context.Courses.Include(c => c.Resume)
-            .FirstOrDefaultAsync(c => c.Id == id && c.Resume.UserId == userId);
-        if (course == null)
-        {
-            return NotFound();
-        }
-
-        ViewBag.ResumeId = course.ResumeId;
-
-        var model = new CreateCourseViewModel
-        {
-            Name = course.Name,
-            Organization = course.Organization,
-            Description = course.Description,
-            StartDate = course.StartDate,
-            EndDate = course.EndDate
-        };
-
-        return View(model);
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditCourse(int id, CreateCourseViewModel model)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var course = await _context.Courses.Include(c => c.Resume)
-            .FirstOrDefaultAsync(c => c.Id == id && c.Resume.UserId == userId);
-        if (course == null)
-        {
-            return NotFound();
-        }
-
-        if (!ModelState.IsValid)
-        {
-            ViewBag.ResumeId = course.ResumeId;
-            return View(model);
-        }
-
-        course.Name = model.Name;
-        course.Organization = model.Organization;
-        course.Description = model.Description;
-        course.StartDate = DateTime.SpecifyKind(model.StartDate, DateTimeKind.Utc);
-        course.EndDate = model.EndDate.HasValue ? DateTime.SpecifyKind(model.EndDate.Value, DateTimeKind.Utc) : null;
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = course.ResumeId });
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> DeleteCourse(int id)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var course = await _context.Courses.Include(c => c.Resume)
-            .FirstOrDefaultAsync(c => c.Id == id && c.Resume.UserId == userId);
-        if (course == null)
-            return NotFound();
-
-        var resumeId = course.ResumeId;
-        _context.Courses.Remove(course);
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = resumeId });
-    }
-    
-    [HttpGet]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> AddEducation(int resumeId)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resumeExists = await _context.Resumes.AnyAsync(r => r.Id == resumeId && r.UserId == userId);
-        if (!resumeExists)
-        {
-            return NotFound();
-        }
-
-        ViewBag.ResumeId = resumeId;
-
-        return View(new CreateEducationViewModel());
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> AddEducation(int resumeId, CreateEducationViewModel model)
-    {
-        if (!ModelState.IsValid)
-        {
-            ViewBag.ResumeId = resumeId;
-            return View(model);
-        }
-
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resumeExists = await _context.Resumes.AnyAsync(r => r.Id == resumeId && r.UserId == userId);
-        if (!resumeExists)
-        {
-            return NotFound();
-        }
-
-        var education = new Education
-        {
-            ResumeId = resumeId,
-            Institution = model.Institution,
-            Specialty = model.Specialty,
-            Description = model.Description,
-            StartDate = DateTime.SpecifyKind(model.StartDate, DateTimeKind.Utc),
-            EndDate = model.EndDate.HasValue ? DateTime.SpecifyKind(model.EndDate.Value, DateTimeKind.Utc) : null
-        };
-
-        _context.Educations.Add(education);
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = resumeId });
-    }
-    
-    [HttpGet]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditEducation(int id)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var education = await _context.Educations.Include(e => e.Resume)
-            .FirstOrDefaultAsync(e => e.Id == id && e.Resume.UserId == userId);
-        if (education == null)
-        {
-            return NotFound();
-        }
-
-        ViewBag.ResumeId = education.ResumeId;
-
-        var model = new CreateEducationViewModel
-        {
-            Institution = education.Institution,
-            Specialty = education.Specialty,
-            Description = education.Description,
-            StartDate = education.StartDate,
-            EndDate = education.EndDate
-        };
-
-        return View(model);
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditEducation(int id, CreateEducationViewModel model)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var education = await _context.Educations.Include(e => e.Resume)
-            .FirstOrDefaultAsync(e => e.Id == id && e.Resume.UserId == userId);
-        if (education == null)
-        {
-            return NotFound();
-        }
-
-        if (!ModelState.IsValid)
-        {
-            ViewBag.ResumeId = education.ResumeId;
-            return View(model);
-        }
-
-        education.Institution = model.Institution;
-        education.Specialty = model.Specialty;
-        education.Description = model.Description;
-        education.StartDate = DateTime.SpecifyKind(model.StartDate, DateTimeKind.Utc);
-        education.EndDate = model.EndDate.HasValue ? DateTime.SpecifyKind(model.EndDate.Value, DateTimeKind.Utc) : null;
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = education.ResumeId });
-    }
-    
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> DeleteEducation(int id)
-    {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var education = await _context.Educations.Include(e => e.Resume)
-            .FirstOrDefaultAsync(e => e.Id == id && e.Resume.UserId == userId);
-        if (education == null)
-            return NotFound();
-
-        var resumeId = education.ResumeId;
-        _context.Educations.Remove(education);
-        await _context.SaveChangesAsync();
-
-        return RedirectToAction(nameof(Details), new { id = resumeId });
+        var file = await _candidateService.GetResumePdfAsync(CurrentUserId, id);
+        return file == null ? NotFound() : File(file.Content, "application/pdf", file.FileName);
     }
 
     [HttpPost]
@@ -564,14 +119,11 @@ public class CandidateController : Controller
     [Authorize(Roles = "Applicant")]
     public async Task<IActionResult> Publish(int id, string? returnUrl)
     {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resume = await _context.Resumes.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
-        if (resume == null)
+        if (!await _candidateService.TogglePublishAsync(CurrentUserId, id))
+        {
             return NotFound();
+        }
 
-        resume.IsPublished = !resume.IsPublished;
-        await _context.SaveChangesAsync();
-        
         if (!string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl))
         {
             return Redirect(returnUrl);
@@ -585,75 +137,230 @@ public class CandidateController : Controller
     [Authorize(Roles = "Applicant")]
     public async Task<IActionResult> Update(int id)
     {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var resume = await _context.Resumes.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
-        if (resume == null)
-            return NotFound();
+        return await _candidateService.RefreshAsync(CurrentUserId, id)
+            ? RedirectToAction("Index", "Candidate")
+            : NotFound();
+    }
+    
 
-        resume.UpdatedDate = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-        
-        return RedirectToAction("Index", "Candidate");
+    [HttpGet]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> AddWorkExperience(int resumeId)
+    {
+        if (!await _candidateService.OwnsResumeAsync(CurrentUserId, resumeId))
+        {
+            return NotFound();
+        }
+
+        ViewBag.ResumeId = resumeId;
+        return View(new CreateWorkExperienceViewModel());
     }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     [Authorize(Roles = "Applicant")]
-    public async Task<IActionResult> EditProfile(EditProfileViewModel model)
+    public async Task<IActionResult> AddWorkExperience(int resumeId, CreateWorkExperienceViewModel model)
     {
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var user = await _userManager.FindByIdAsync(userId.ToString());
-        if (user == null)
+        if (!ModelState.IsValid)
+        {
+            ViewBag.ResumeId = resumeId;
+            return View(model);
+        }
+
+        return await _candidateService.AddWorkExperienceAsync(CurrentUserId, resumeId, model)
+            ? RedirectToAction(nameof(Details), new { id = resumeId })
+            : NotFound();
+    }
+
+    [HttpGet]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditWorkExperience(int id)
+    {
+        var data = await _candidateService.GetWorkExperienceForEditAsync(CurrentUserId, id);
+        if (data == null)
         {
             return NotFound();
         }
+
+        ViewBag.ResumeId = data.ResumeId;
+        return View(data.Model);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditWorkExperience(int id, CreateWorkExperienceViewModel model)
+    {
         if (!ModelState.IsValid)
         {
-            TempData["EditProfileError"] = "Проверьте правильность заполнения полей.";
-            return RedirectToAction(nameof(Index));
-        }
-        
-        if (user.UserName != model.Username)
-        {
-            var existingUser = await _userManager.FindByNameAsync(model.Username);
-            if (existingUser != null && existingUser.Id != user.Id)
+            var data = await _candidateService.GetWorkExperienceForEditAsync(CurrentUserId, id);
+            if (data == null)
             {
-                ModelState.AddModelError(nameof(model.Username), "Это имя пользователя уже занято.");
+                return NotFound();
             }
+
+            ViewBag.ResumeId = data.ResumeId;
+            return View(model);
         }
 
-        if (user.Email != model.Email)
+        var resumeId = await _candidateService.UpdateWorkExperienceAsync(CurrentUserId, id, model);
+        return resumeId == null ? NotFound() : RedirectToAction(nameof(Details), new { id = resumeId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> DeleteWorkExperience(int id)
+    {
+        var resumeId = await _candidateService.DeleteWorkExperienceAsync(CurrentUserId, id);
+        return resumeId == null ? NotFound() : RedirectToAction(nameof(Details), new { id = resumeId });
+    }
+    
+
+    [HttpGet]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> AddCourse(int resumeId)
+    {
+        if (!await _candidateService.OwnsResumeAsync(CurrentUserId, resumeId))
         {
-            var existingUser = await _userManager.FindByEmailAsync(model.Email);
-            if (existingUser != null && existingUser.Id != user.Id)
-            {
-                ModelState.AddModelError(nameof(model.Email), "Этот адрес электронной почты уже используется.");
-            }
+            return NotFound();
         }
 
+        ViewBag.ResumeId = resumeId;
+        return View(new CreateCourseViewModel());
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> AddCourse(int resumeId, CreateCourseViewModel model)
+    {
         if (!ModelState.IsValid)
         {
-            TempData["EditProfileError"] = "Проверьте правильность заполнения полей.";
-            return RedirectToAction(nameof(Index));
+            ViewBag.ResumeId = resumeId;
+            return View(model);
         }
 
-        user.UserName = model.Username;
-        user.Email = model.Email;
-        user.PhoneNumber = model.PhoneNumber;
-        user.ProfilePicture = model.ProfilePicture;
+        return await _candidateService.AddCourseAsync(CurrentUserId, resumeId, model)
+            ? RedirectToAction(nameof(Details), new { id = resumeId })
+            : NotFound();
+    }
 
-        var result = await _userManager.UpdateAsync(user);
-        if (result.Succeeded)
+    [HttpGet]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditCourse(int id)
+    {
+        var data = await _candidateService.GetCourseForEditAsync(CurrentUserId, id);
+        if (data == null)
         {
-            return RedirectToAction(nameof(Index));
+            return NotFound();
         }
 
-        foreach (var error in result.Errors)
+        ViewBag.ResumeId = data.ResumeId;
+        return View(data.Model);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditCourse(int id, CreateCourseViewModel model)
+    {
+        if (!ModelState.IsValid)
         {
-            ModelState.AddModelError(string.Empty, error.Description);
+            var data = await _candidateService.GetCourseForEditAsync(CurrentUserId, id);
+            if (data == null)
+            {
+                return NotFound();
+            }
+
+            ViewBag.ResumeId = data.ResumeId;
+            return View(model);
         }
 
-        TempData["EditProfileError"] = "Не удалось сохранить изменения.";
-        return RedirectToAction(nameof(Index));
+        var resumeId = await _candidateService.UpdateCourseAsync(CurrentUserId, id, model);
+        return resumeId == null ? NotFound() : RedirectToAction(nameof(Details), new { id = resumeId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> DeleteCourse(int id)
+    {
+        var resumeId = await _candidateService.DeleteCourseAsync(CurrentUserId, id);
+        return resumeId == null ? NotFound() : RedirectToAction(nameof(Details), new { id = resumeId });
+    }
+    
+
+    [HttpGet]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> AddEducation(int resumeId)
+    {
+        if (!await _candidateService.OwnsResumeAsync(CurrentUserId, resumeId))
+        {
+            return NotFound();
+        }
+
+        ViewBag.ResumeId = resumeId;
+        return View(new CreateEducationViewModel());
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> AddEducation(int resumeId, CreateEducationViewModel model)
+    {
+        if (!ModelState.IsValid)
+        {
+            ViewBag.ResumeId = resumeId;
+            return View(model);
+        }
+
+        return await _candidateService.AddEducationAsync(CurrentUserId, resumeId, model)
+            ? RedirectToAction(nameof(Details), new { id = resumeId })
+            : NotFound();
+    }
+
+    [HttpGet]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditEducation(int id)
+    {
+        var data = await _candidateService.GetEducationForEditAsync(CurrentUserId, id);
+        if (data == null)
+        {
+            return NotFound();
+        }
+
+        ViewBag.ResumeId = data.ResumeId;
+        return View(data.Model);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> EditEducation(int id, CreateEducationViewModel model)
+    {
+        if (!ModelState.IsValid)
+        {
+            var data = await _candidateService.GetEducationForEditAsync(CurrentUserId, id);
+            if (data == null)
+            {
+                return NotFound();
+            }
+
+            ViewBag.ResumeId = data.ResumeId;
+            return View(model);
+        }
+
+        var resumeId = await _candidateService.UpdateEducationAsync(CurrentUserId, id, model);
+        return resumeId == null ? NotFound() : RedirectToAction(nameof(Details), new { id = resumeId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Applicant")]
+    public async Task<IActionResult> DeleteEducation(int id)
+    {
+        var resumeId = await _candidateService.DeleteEducationAsync(CurrentUserId, id);
+        return resumeId == null ? NotFound() : RedirectToAction(nameof(Details), new { id = resumeId });
     }
 }
