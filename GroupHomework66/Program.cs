@@ -18,6 +18,7 @@ public class Program
 
         builder.Services.AddScoped<ResumePdfService>();
         builder.Services.AddScoped<IVacancyService, VacancyService>();
+        builder.Services.AddScoped<ICompanyService, CompanyService>();
         
         string? connection = builder.Configuration.GetConnectionString("DefaultConnection");
         builder.Services.AddDbContext<SiteMobileContext>(options => options.UseNpgsql(connection))
